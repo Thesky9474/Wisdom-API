@@ -1,18 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
+import os
 from routers.verses import router as verse_router
 from routers import tags
 from rag.router import router as rag_router
 
 app = FastAPI()
 
-origins = [
-    "http://localhost:5173",
-    "http://localhost:5000",
-    "https://your-frontend-app.vercel.app",
-    "https://your-backend-server.onrender.com"
-]
+allowed_origins_str = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173")
+
+origins = allowed_origins_str.split(',')
 
 app.add_middleware(
     CORSMiddleware,
