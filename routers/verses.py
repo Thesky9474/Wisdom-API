@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from db import db
 from models import Verse
-from typing import List
+from typing import List, Optional
 from bson import ObjectId
 
 router = APIRouter()
@@ -39,9 +39,12 @@ async def get_all_chapters():
     return chapters_list
 
 @router.get("/chapter/{chapter}", response_model=List[Verse])
-async def get_verses_by_chapter(chapter: int):
+async def get_verses_by_chapter(chapter: int, limit: Optional[int] = None):
+    """Retrieves verses for a chapter, with an optional limit."""
     cursor = db["verses"].find({"chapter": chapter})
-    verses = await cursor.to_list(length=200)
+    if limit:
+        cursor = cursor.limit(limit)
+    verses = await cursor.to_list(length=limit or 200)
     return [clean_verse(v) for v in verses]
 
 @router.get("/verse_number/{verse_number}", response_model=Verse)
