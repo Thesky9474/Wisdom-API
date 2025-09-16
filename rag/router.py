@@ -1,9 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import pymongo
+import pymongo, os, json
 import google.generativeai as genai
-import os
 from bson import ObjectId
+from utils.cache import cache_get, cache_set
 
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
@@ -21,20 +21,33 @@ def clean_mongo_document(doc):
 @router.post("/rag/query")
 def rag_query(request: QueryRequest):
     try:
-        # Step 1: Generate embedding for query
-        embed_result = genai.embed_content(
-            model="models/embedding-001",
-            content=request.query,
-            task_type="retrieval_query"
-        )
-        query_embedding = embed_result["embedding"]
+        cache_key = f"rag:{request.query}:{request.top_k}"
+
+        # ✅ 1. Check cached results
+        cached = cache_get(cache_key)
+        if cached:
+            return {"results": json.loads(cached)}
         
-        # Step 2: Connect to DB
+        # ✅ 2. Check cached embedding
+        embed_key = f"embedding:{request.query}"
+        cached_embed = cache_get(embed_key)
+        if cached_embed:
+            query_embedding = json.loads(cached_embed)
+        else:
+            embed_result = genai.embed_content(
+                model="models/embedding-001",
+                content=request.query,
+                task_type="retrieval_query"
+            )
+            query_embedding = embed_result["embedding"]
+            cache_set(embed_key, json.dumps(query_embedding), ttl=86400)
+        
+        # Step 3: Connect to DB
         client = pymongo.MongoClient(os.getenv("MONGO_URI"))
         db = client["ashtavakra"]
         collection = db["verses"]
 
-        # Step 3: Run vector search
+        # Step 4: Run vector search
         pipeline = [
             {
                 "$vectorSearch": {
@@ -62,9 +75,11 @@ def rag_query(request: QueryRequest):
         ]
         results = list(collection.aggregate(pipeline))
 
-        # ✅ Convert _id to string for all results
         for result in results:
             result["_id"] = str(result["_id"])
+
+        # ✅ 5. Cache results (30 min TTL)
+        cache_set(cache_key, json.dumps(results), ttl=1800)
 
         return {"results": results}
 

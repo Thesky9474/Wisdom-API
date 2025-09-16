@@ -1,81 +1,105 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from db import db
 from models import Verse
 from typing import List, Optional
-from bson import ObjectId
+import json
+from utils.serializers import serialize_list, serialize_doc
+from utils.cache import cache_get, cache_set
+from utils.auth import optional_user   
 
 router = APIRouter()
 
-# Utility: Clean MongoDB doc
-def clean_verse(verse):
-    if "_id" in verse:
-        verse["_id"] = str(verse["_id"])
-    return verse
-
-# --- Specific routes should come BEFORE dynamic routes ---
-
 @router.get("/random", response_model=Verse)
 async def get_random_verse():
-    """
-    Selects and returns a single random verse from the database using
-    an efficient aggregation pipeline.
-    """
     pipeline = [{"$sample": {"size": 1}}]
     random_verse_cursor = db["verses"].aggregate(pipeline)
     random_verse_list = await random_verse_cursor.to_list(length=1)
-    
+
     if not random_verse_list:
-        raise HTTPException(status_code=404, detail="No verses found in database to select from.")
-        
-    return clean_verse(random_verse_list[0])
+        raise HTTPException(status_code=404, detail="No verses found")
+
+    return serialize_doc(random_verse_list[0])
+
 
 @router.get("/chapters", response_model=List[int])
-async def get_all_chapters():
-    """
-    Retrieves a sorted list of unique chapter numbers.
-    """
+async def get_all_chapters(user=Depends(optional_user)):
+    role = "auth" if user else "guest"
+    cache_key = f"chapters:{role}"
+
+    cached = cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
     chapters_list = await db["verses"].distinct("chapter")
     chapters_list.sort()
+
+    if role == "guest":
+        chapters_list = [1]   # only Chapter 1 for guests
+
+    cache_set(cache_key, json.dumps(chapters_list), ttl=43200)
     return chapters_list
 
+
 @router.get("/chapter/{chapter}", response_model=List[Verse])
-async def get_verses_by_chapter(chapter: int, limit: Optional[int] = None):
-    """Retrieves verses for a chapter, with an optional limit."""
-    cursor = db["verses"].find({"chapter": chapter})
-    if limit:
-        cursor = cursor.limit(limit)
-    verses = await cursor.to_list(length=limit or 200)
-    return [clean_verse(v) for v in verses]
+async def get_verses_by_chapter(chapter: int, skip: int = 0, limit: Optional[int] = 50, user=Depends(optional_user)):
+    role = "auth" if user else "guest"
+    cache_key = f"chapter:{role}:{chapter}:{skip}:{limit}"
+
+    cached = cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    if not user:
+        if chapter != 1:
+            raise HTTPException(status_code=401, detail="Login required to view other chapters")
+        if limit is None or limit > 5:
+            limit = 5
+            
+    cursor = db["verses"].find({"chapter": chapter}).skip(skip).limit(limit)
+    verses = await cursor.to_list(length=limit or 50)
+
+
+    verses = serialize_list(verses)
+    cache_set(cache_key, json.dumps(verses), ttl=43200)
+    return verses
+
 
 @router.get("/verse_number/{verse_number}", response_model=Verse)
-async def get_by_verse_number(verse_number: str):
+async def get_by_verse_number(verse_number: str, user=Depends(optional_user)):
+    role = "auth" if user else "guest"
+    cache_key = f"verse_number:{role}:{verse_number}"
+
+    cached = cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
     verse = await db["verses"].find_one({"verse_number": verse_number})
     if not verse:
         raise HTTPException(status_code=404, detail="Verse not found")
-    return clean_verse(verse)
 
-# --- Dynamic/Generic routes should come LAST ---
+    if role == "guest" and verse.get("chapter") != 1:
+        return {"message": "Not available for guest users"}
 
-@router.get("/{verse_id}", response_model=Verse)
-async def get_single_verse(verse_id: str):
-    """
-    This route now comes after specific string routes like /random
-    to avoid incorrect matching.
-    """
-    try:
-        obj_id = ObjectId(verse_id)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid verse ID")
+    verse = serialize_doc(verse)
+    cache_set(cache_key, json.dumps(verse), ttl=43200)
+    return verse
 
-    verse = await db["verses"].find_one({"_id": obj_id})
-    if verse is None:
-        raise HTTPException(status_code=404, detail="Verse not found")
 
-    return clean_verse(verse)
-
-# The "/" route can be here or at the end as it doesn't conflict.
 @router.get("/", response_model=List[Verse])
-async def get_all_verses():
-    cursor = db["verses"].find()
-    verses = await cursor.to_list(length=1000)
-    return [clean_verse(v) for v in verses]
+async def get_all_verses(skip: int = 0, limit: int = 50, user=Depends(optional_user)):
+    role = "auth" if user else "guest"
+    cache_key = f"all_verses:{role}:{skip}:{limit}"
+
+    cached = cache_get(cache_key)
+    if cached:
+        return json.loads(cached)
+
+    cursor = db["verses"].find().skip(skip).limit(limit)
+    verses = await cursor.to_list(length=limit or 50)
+
+    if role == "guest":
+        verses = [v for v in verses if v.get("chapter") == 1][:5]
+
+    verses = serialize_list(verses)
+    cache_set(cache_key, json.dumps(verses), ttl=43200)
+    return verses

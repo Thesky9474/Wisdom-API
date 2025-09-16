@@ -11,7 +11,7 @@ class Verse(BaseModel):
     commentary: str
     tags: List[str]
     audio_url: Optional[str] = None
-    _id: Optional[str] = None  # Include if you convert ObjectId to string
+    _id: Optional[str] = None  
 
     class Config:
         orm_mode = True
@@ -23,3 +23,6 @@ class Tag(BaseModel):
 class TagMap(BaseModel):
     name: str
     verses: List[str]
+
+class LoginRequest(BaseModel):
+    username: str

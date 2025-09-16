@@ -38,4 +38,6 @@ typing-inspection==0.4.1
 typing-extensions==4.14.1
 uritemplate==4.2.0
 urllib3==2.5.0
-uvicorn==0.35.0
+uvicorn==0.22.0  # Updated for latest stability and features
+redis==5.0.0     # Add explicit redis client library
+python-jose==3.3.0  # For JWT handling
